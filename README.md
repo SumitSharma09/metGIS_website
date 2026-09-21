@@ -1,4 +1,4 @@
-# MetGIS — Tower Weather Operations Console
+# MetGIS — Weather Operations Console
 
 A production-ready React + TypeScript frontend for monitoring weather conditions and
 risk across telecom tower infrastructure, functionally comparable to map-centric
