@@ -8,8 +8,8 @@ import TableRow from '@mui/material/TableRow';
 import Paper from '@mui/material/Paper';
 import Box from '@mui/material/Box';
 import { EmptyState } from '@/components/common/EmptyState';
-import { RISK_COLOR, REPORT_RISK_LABEL, type RiskLevel } from '@/utils/severity';
-import { computeOverallRisk, worseRisk } from '../riskAggregation';
+import { RISK_COLOR, REPORT_RISK_LABEL, worseRisk, type RiskLevel } from '@/utils/severity';
+import { computeOverallRisk } from '../riskAggregation';
 import type { Site } from '@/features/sites/types';
 import type { ForecastDaySnapshot } from '../useFiveDayObservations';
 

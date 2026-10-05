@@ -5,8 +5,9 @@ import Autocomplete from '@mui/material/Autocomplete';
 import TextField from '@mui/material/TextField';
 import Chip from '@mui/material/Chip';
 import LockRoundedIcon from '@mui/icons-material/LockRounded';
-import { useListDistrictsQuery } from '@/features/sites/sitesApi';
+import { useListDistrictsReferenceQuery } from '@/features/sites/sitesApi';
 import { useScopedStates } from '@/features/users/useScopedStates';
+import { normalizeName } from '@/utils/districtRisk';
 
 interface MapControlsProps {
   state: string | null;
@@ -17,6 +18,15 @@ interface MapControlsProps {
    *  least one real monitored site (LiveMapPage's `stateOptions`, from
    *  `useVisibleStates()` - RBAC intersected with `useListStatesQuery()`). */
   stateOptions: string[];
+  /** normalizeName(real state name) -> the actual raw `Site.state` (circle)
+   *  value to filter by (see `buildStateSourceMap` in districtRisk.ts).
+   *  `stateOptions` only ever lists plain real government state names
+   *  ("Madhya Pradesh"), never a combined circle's raw value ("Madhya
+   *  Pradesh & Chhattisgarh") - picking one from this dropdown without
+   *  resolving through this map would filter every downstream query
+   *  (sites, district list) by a value no site actually has, silently
+   *  returning nothing. */
+  stateSourceMap?: Map<string, string>;
 }
 
 /**
@@ -38,14 +48,28 @@ export function MapControls({
   district,
   onChangeDistrict,
   stateOptions,
+  stateSourceMap,
 }: MapControlsProps) {
-  // Real, monitored districts only - this used to be widened with every
-  // administrative district from the government boundary dataset, which
-  // listed districts with zero real towers alongside actual ones. See the
-  // matching fix in useDistrictBoundaries.ts's useVisibleStates() for the
-  // same class of issue on the State dropdown above.
-  const { data: districts = [] } = useListDistrictsQuery(state ?? undefined, { skip: !state });
+  // Sourced from the curated indus_districts reference table (added
+  // 2026-10-04), not derived from whatever free-text District spelling
+  // happens to exist among real towers - see sitesApi.ts's own comment and
+  // claude/live-map-indus-district-hull-replacement.md for why (a real
+  // Rajgarh/Raigarh mix-up was traced back to trusting the tower-derived
+  // list here). Note this can now list a district with zero current live
+  // towers, unlike the old tower-derived list - that's expected: it's this
+  // table's real district list for the state, not a "has data" filter.
+  const { data: districts = [] } = useListDistrictsReferenceQuery(state ?? undefined, { skip: !state });
   const { isPanIndia, assignedStates } = useScopedStates();
+
+  // `state` (the prop, and what every downstream REST query filters by) can
+  // legitimately hold a combined circle's raw value ("Madhya Pradesh &
+  // Chhattisgarh") rather than a plain state name - `stateOptions` only ever
+  // lists plain names, so showing `state` directly in the input would show
+  // that whole raw string instead of a clean, selectable-looking name. This
+  // finds whichever plain option actually resolves (via `stateSourceMap`) to
+  // the current `state` value, purely for what the input displays.
+  const displayState =
+    stateOptions.find((opt) => stateSourceMap?.get(normalizeName(opt)) === state) ?? state;
 
   return (
     <Paper
@@ -68,9 +92,15 @@ export function MapControls({
         <Autocomplete
           size="small"
           options={stateOptions}
-          value={state}
+          value={displayState}
           onChange={(_e, value) => {
-            onChangeState(value);
+            // Resolve the plain name picked from the list back to the
+            // actual raw `Site.state` (circle) value before it goes
+            // anywhere - see `stateSourceMap`'s own doc comment above for
+            // why passing the plain name straight through silently breaks
+            // every downstream query for a combined circle.
+            const resolved = value ? stateSourceMap?.get(normalizeName(value)) ?? value : null;
+            onChangeState(resolved);
             onChangeDistrict(null);
           }}
           renderInput={(params) => <TextField {...params} label="State" />}

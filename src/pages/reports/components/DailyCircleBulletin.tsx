@@ -15,25 +15,24 @@ import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Button from '@mui/material/Button';
 import PictureAsPdfRoundedIcon from '@mui/icons-material/PictureAsPdfRounded';
+import TableChartRoundedIcon from '@mui/icons-material/TableChartRounded';
 import { useListCirclesQuery, useListSitesQuery } from '@/features/sites/sitesApi';
 import { RISK_COLOR, worseRisk, type RiskLevel } from '@/utils/severity';
 import { getActiveCyclone } from '@/pages/hazards/hazardData';
 import { EmptyState } from '@/components/common/EmptyState';
-import { useSevenDayObservations } from '../useSevenDayObservations';
-import { useSevenDayForecastTotals } from '../useSevenDayForecastTotals';
-import { exportCircleBulletinToPdf } from '../exportUtils';
+import { useSkymetSevenDayForecast } from '../useSkymetSevenDayForecast';
+import { exportCircleBulletinToPdf, exportCircleBulletinToExcel } from '../exportUtils';
 import {
   BULLETIN_SEVERITIES,
   RAIN_WIND_SEVERITY_LABEL,
   RAIN_LEGEND,
   WIND_LEGEND,
   TEMPERATURE_LEGEND,
-  BULLETIN_HAZARD_PERILS,
-  buildParameterMatrix,
-  buildForecastParameterMatrix,
-  buildHazardRow,
+  SKYMET_BULLETIN_HAZARD_PERILS,
+  buildSkymetParameterMatrix,
+  buildSkymetHazardRow,
   buildCycloneHazardRow,
-  buildCircleHeadlines,
+  buildSkymetCircleHeadlines,
   type HazardEntry,
 } from '../bulletinData';
 
@@ -99,50 +98,49 @@ export function DailyCircleBulletin() {
     { skip: !circle }
   );
   const sites = useMemo(() => sitesPage?.items ?? [], [sitesPage]);
-  const siteIds = useMemo(() => sites.map((s) => s.id), [sites]);
-  const { days, isLoading: obsLoading } = useSevenDayObservations(siteIds);
-  const { days: forecastDays, isLoading: forecastLoading } = useSevenDayForecastTotals(siteIds);
+  // Real per-day Skymet vendor outlook - see the National Bulletin's own
+  // comment and useSkymetSevenDayForecast's doc comment for why one hook
+  // now covers Rain/Temp/Wind and the three primitive-based hazard rows.
+  const { days, isLoading: skymetLoading } = useSkymetSevenDayForecast(sites);
   const cyclone = useMemo(() => getActiveCyclone(), []);
 
   const districts = useMemo(() => new Set(sites.map((s) => s.district)), [sites]);
 
-  // Same real daily-aggregated source as the National Bulletin - see that
-  // file's comment.
-  const rainMatrix = useMemo(
-    () => buildForecastParameterMatrix(sites, forecastDays, 'rainfall', (s) => s.district),
-    [sites, forecastDays]
-  );
+  const rainMatrix = useMemo(() => buildSkymetParameterMatrix(sites, days, 'rainfall', (s) => s.district), [sites, days]);
   const tempMatrix = useMemo(
-    () => buildForecastParameterMatrix(sites, forecastDays, 'temperature', (s) => s.district),
-    [sites, forecastDays]
+    () => buildSkymetParameterMatrix(sites, days, 'temperature', (s) => s.district),
+    [sites, days]
   );
-  const windMatrix = useMemo(() => buildParameterMatrix(sites, days, 'windSpeed', (s) => s.district), [sites, days]);
+  const windMatrix = useMemo(
+    () => buildSkymetParameterMatrix(sites, days, 'windSpeed', (s) => s.district),
+    [sites, days]
+  );
 
   const hazardRows = useMemo(
     () => [
       {
         key: 'cyclone',
-        label: cyclone ? `Cyclone (${cyclone.name})` : 'Cyclone (no live data)',
+        label: cyclone ? `Cyclone (${cyclone.name})` : 'Cyclone',
         cells: buildCycloneHazardRow(cyclone, days, (district) => (districts.has(district) ? district : null)),
       },
-      ...BULLETIN_HAZARD_PERILS.map((peril) => ({
+      ...SKYMET_BULLETIN_HAZARD_PERILS.map((peril) => ({
         key: peril.key,
         label: peril.label,
-        cells: buildHazardRow(sites, days, peril, (s) => s.district),
+        cells: buildSkymetHazardRow(sites, days, peril, (s) => s.district),
       })),
     ],
     [sites, days, cyclone, districts]
   );
 
   const headlines = useMemo(
-    () => (circle ? buildCircleHeadlines(circle, sites, days) : []),
+    () => (circle ? buildSkymetCircleHeadlines(circle, sites, days) : []),
     [circle, sites, days]
   );
 
   const shortDays = days.slice(0, 3);
   const longDays = days.slice(3, 7);
 
-  const loading = sitesLoading || obsLoading || forecastLoading;
+  const loading = sitesLoading || skymetLoading;
 
   return (
     <Stack spacing={2}>
@@ -154,6 +152,18 @@ export function DailyCircleBulletin() {
           sx={{ maxWidth: 320, flexGrow: 1 }}
           renderInput={(params) => <TextField {...params} label="Circle" size="small" />}
         />
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<TableChartRoundedIcon />}
+          disabled={!circle || loading || sites.length === 0}
+          onClick={() =>
+            circle &&
+            exportCircleBulletinToExcel({ circle, days, rainMatrix, windMatrix, tempMatrix, hazardRows, headlines })
+          }
+        >
+          Export Excel
+        </Button>
         <Button
           size="small"
           variant="outlined"

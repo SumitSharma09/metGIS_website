@@ -13,7 +13,15 @@ import FormHelperText from '@mui/material/FormHelperText';
 import CircularProgress from '@mui/material/CircularProgress';
 import { MultiSiteSelector } from '@/components/common/SiteSelector';
 import { reportRequestSchema, type ReportRequestFormValues } from '@/utils/validation';
-import { WEATHER_PARAMETERS } from '@/utils/constants';
+// Fixed 2026-09-24: this used to pull from the old, 7-item WEATHER_PARAMETERS
+// list in utils/constants.ts (temperature/rainfall/windSpeed/windDirection/
+// humidity/pressure/lightning), which predates and diverges from the app's
+// actual current report parameter set. Switched to the same FORECAST_PARAMETERS
+// list the Districts Risk Reports tab and both Daily Bulletins already use, so
+// a manually generated report can offer every real parameter (including
+// visibility/flood/fog/snowfall/avalanche/cyclone, previously missing here)
+// instead of a stale subset.
+import { FORECAST_PARAMETERS } from './forecastParameters';
 
 interface ReportFormDialogProps {
   open: boolean;
@@ -78,18 +86,18 @@ export function ReportFormDialog({ open, submitting, onClose, onSubmit }: Report
             render={({ field }) => (
               <Stack spacing={1}>
                 <Stack direction="row" flexWrap="wrap" gap={1}>
-                  {WEATHER_PARAMETERS.map((param) => {
-                    const active = field.value.includes(param.value);
+                  {FORECAST_PARAMETERS.map((param) => {
+                    const active = field.value.includes(param.key);
                     return (
                       <Chip
-                        key={param.value}
+                        key={param.key}
                         label={param.label}
                         size="small"
                         color={active ? 'primary' : 'default'}
                         variant={active ? 'filled' : 'outlined'}
                         onClick={() =>
                           field.onChange(
-                            active ? field.value.filter((p) => p !== param.value) : [...field.value, param.value]
+                            active ? field.value.filter((p) => p !== param.key) : [...field.value, param.key]
                           )
                         }
                       />

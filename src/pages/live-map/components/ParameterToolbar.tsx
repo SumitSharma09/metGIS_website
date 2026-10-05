@@ -1,10 +1,10 @@
 import Paper from '@mui/material/Paper';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
-import Divider from '@mui/material/Divider';
 import Typography from '@mui/material/Typography';
 import ThermostatRoundedIcon from '@mui/icons-material/ThermostatRounded';
 import WaterDropRoundedIcon from '@mui/icons-material/WaterDropRounded';
+import OpacityRoundedIcon from '@mui/icons-material/OpacityRounded';
 import WbCloudyRoundedIcon from '@mui/icons-material/WbCloudyRounded';
 import VisibilityRoundedIcon from '@mui/icons-material/VisibilityRounded';
 import CloudRoundedIcon from '@mui/icons-material/CloudRounded';
@@ -17,6 +17,9 @@ import type { MapLayer } from '../mapLayers';
 const LAYER_ICON: Record<MapLayer, JSX.Element> = {
   temperature: <ThermostatRoundedIcon fontSize="small" />,
   rainfall: <WaterDropRoundedIcon fontSize="small" />,
+  // Distinct from rainfall's raindrop icon (OpacityRounded reads as
+  // "moisture" rather than "falling rain") - added 2026-09-23.
+  humidity: <OpacityRoundedIcon fontSize="small" />,
   cloud: <WbCloudyRoundedIcon fontSize="small" />,
   visibility: <VisibilityRoundedIcon fontSize="small" />,
   fog: <CloudRoundedIcon fontSize="small" />,
@@ -29,6 +32,7 @@ const LAYER_ICON: Record<MapLayer, JSX.Element> = {
 const LAYER_SHORT_LABEL: Record<MapLayer, string> = {
   temperature: 'Temp',
   rainfall: 'Rainfall',
+  humidity: 'Humidity',
   cloud: 'Cloud',
   visibility: 'Visibility',
   fog: 'Fog',
@@ -44,19 +48,48 @@ const LAYER_SHORT_LABEL: Record<MapLayer, string> = {
 // hazard lives together in one place instead of being split across two
 // pages. Snowfall stays here since it's an ordinary weather reading, not a
 // hazard advisory.
+//
+// 'wind' was missing from this list entirely (fixed 2026-09-23, real bug -
+// "if i click the wind ... that data show me on map but mouse over didn't
+// show the parameter name with data"): a standalone "Wind" toggle used to
+// sit at the end of this toolbar controlling only `showWind`, the animated
+// wind-FLOW streamline overlay (WindFlowLayer) - it never called
+// `onChangeLayer('wind')`, so the map's active PARAMETER (the thing that
+// actually drives the choropleth coloring and every hover tooltip's
+// reading row) could never become Wind through the UI, even though `layer`
+// itself, `layerRisk`/`layerReading`/`layerUnitLabel` (mapLayers.ts),
+// `buildDistrictRiskIndex`/`buildStateRiskIndex` (districtRisk.ts), and
+// every hover-tooltip row builder (DistrictLayer/StateOutlinesLayer/
+// ClusteredSiteMarkers) have supported 'wind' as a full parameter,
+// including its own Direction/Gust tooltip rows, since earlier this
+// session. Added here, in the same relative position MAP_LAYERS itself
+// already lists it (right after visibility, before snowfall), so Wind is a
+// normal selectable parameter alongside Temperature/Rainfall/Cloud/
+// Visibility/Snowfall.
+//
+// Follow-up the same day ("please merge this windflow with wind
+// button"): the separate flow-overlay toggle described above has been
+// REMOVED from this toolbar entirely. There is now exactly one Wind
+// control here, and selecting it is what turns the flow-arrows overlay on
+// too - see LiveMapPage.tsx, which derives `showWind` straight from
+// `layer === 'wind'` instead of tracking it as independent state. So
+// clicking this button now does both things the user wants in one click:
+// makes Wind the active choropleth/tooltip parameter AND shows the
+// animated flow arrows; picking any other parameter turns the arrows back
+// off automatically.
 const PARAMETER_ORDER: MapLayer[] = [
   'temperature',
   'rainfall',
+  'humidity',
   'cloud',
   'visibility',
+  'wind',
   'snowfall',
 ];
 
 interface ParameterToolbarProps {
   layer: MapLayer;
   onChangeLayer: (layer: MapLayer) => void;
-  showWind: boolean;
-  onToggleWind: (show: boolean) => void;
 }
 
 const BUTTON_SX = {
@@ -69,7 +102,7 @@ const BUTTON_SX = {
   textTransform: 'none' as const,
 };
 
-export function ParameterToolbar({ layer, onChangeLayer, showWind, onToggleWind }: ParameterToolbarProps) {
+export function ParameterToolbar({ layer, onChangeLayer }: ParameterToolbarProps) {
   return (
     <Paper
       elevation={4}
@@ -104,21 +137,6 @@ export function ParameterToolbar({ layer, onChangeLayer, showWind, onToggleWind 
           </ToggleButton>
         ))}
       </ToggleButtonGroup>
-
-      <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
-
-      <ToggleButton
-        value="wind"
-        size="small"
-        selected={showWind}
-        onChange={() => onToggleWind(!showWind)}
-        sx={BUTTON_SX}
-      >
-        {LAYER_ICON.wind}
-        <Typography variant="caption" sx={{ fontSize: '0.65rem', lineHeight: 1 }}>
-          Wind
-        </Typography>
-      </ToggleButton>
     </Paper>
   );
 }

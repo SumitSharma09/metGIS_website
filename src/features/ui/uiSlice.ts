@@ -10,10 +10,14 @@ interface UiState {
 function loadInitialThemeMode(): ThemeMode {
   const stored = localStorage.getItem(THEME_MODE_STORAGE_KEY);
   if (stored === 'light' || stored === 'dark') return stored;
-  // The reference ops tool runs dark by default (control-room style,
-  // low-glare map view) - default to dark rather than following the OS
-  // preference, but still let the user override and remember it.
-  return 'dark';
+  // Changed 2026-09-21 (on request: "dashboard open default in light mode
+  // not in dark mode in every system") - light is now the default for a
+  // first-time visitor on any machine/browser, regardless of that system's
+  // OS/browser dark-mode preference. The user can still switch to dark from
+  // the settings menu, and that choice is remembered per-browser via
+  // THEME_MODE_STORAGE_KEY exactly as before - this only changes what a
+  // browser with no stored preference yet sees first.
+  return 'light';
 }
 
 const initialState: UiState = {

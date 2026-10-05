@@ -8,11 +8,12 @@ import {
   RISK_RANK,
   type RiskLevel,
 } from '@/utils/severity';
-import { getFloodRisk, STATE_REGION, type CycloneSystem } from '@/pages/hazards/hazardData';
+import { STATE_REGION, type CycloneSystem } from '@/pages/hazards/hazardData';
 import type { Site } from '@/features/sites/types';
-import type { CurrentObservation } from '@/features/weather/types';
+import type { CurrentObservation, SkymetForecastDay } from '@/features/weather/types';
 import type { ForecastDaySnapshot } from './useSevenDayObservations';
 import type { DailyForecastSnapshot } from './useSevenDayForecastTotals';
+import type { SkymetDaySnapshot } from './useSkymetSevenDayForecast';
 
 /**
  * Data prep shared by the Reports page's two "Daily Weather Bulletin"
@@ -64,18 +65,20 @@ export const TEMPERATURE_LEGEND: Record<BulletinSeverity, string> = {
 };
 // The SOW's own Hazard legend gives numbers for every peril (flood depth in
 // metres, snowfall in cm, landslide/avalanche as probabilities) - this app
-// doesn't model those quantities (getFloodRisk is rainfall reused, and
-// snowfall/avalanche/landslide are elevation-gated multi-factor scores, not
-// a single measured value), so copying the SOW's numbers here would show a
-// legend that doesn't match what's actually driving the colors. Instead,
-// each row below states the real threshold this app computes from when one
-// exists (Cyclone kmph, Flooding mm/hr, Lightning strikes/hr all have a
+// doesn't model those quantities (snowfall/avalanche/landslide are
+// elevation-gated multi-factor scores, not a single measured value), so
+// copying the SOW's numbers here would show a legend that doesn't match
+// what's actually driving the colors. Instead, each row below states the
+// real threshold this app computes from when one exists (Cyclone kmph has a
 // genuine single-number threshold), and says "multi-factor" for the three
-// that don't - keeping this legend honest rather than copying invented units.
+// that don't - keeping this legend honest rather than copying invented
+// units. Lightning and Flooding were removed on 2026-09-21 (on request:
+// "remove demo data") - the real hourly_weather schema has no
+// lightning-detection or flood/hydrology column, so both were only ever
+// derived proxies from rainfall/wind, not real hazard readings. They'll come
+// back once real hazard data is supplied.
 export const HAZARD_LEGEND: { key: string; label: string; bands: Record<BulletinSeverity, string> }[] = [
   { key: 'cyclone', label: 'Cyclone (kmph)', bands: { warning: '>= 165', alert: '117 - 165', watch: '87 - 117' } },
-  { key: 'lightning', label: 'Lightning (strikes/hr)', bands: { warning: '>= 20', alert: '10 - 19', watch: '1 - 9' } },
-  { key: 'flooding', label: 'Flooding (from rainfall)', bands: { warning: '>= 40 mm/hr', alert: '20 - 39 mm/hr', watch: '10 - 19 mm/hr' } },
   {
     key: 'landslide',
     label: 'Landslide',
@@ -94,12 +97,22 @@ export const HAZARD_LEGEND: { key: string; label: string; bands: Record<Bulletin
 ];
 
 /** Which of the app's 6 states/regions each state belongs to, for the
- *  Daily National Bulletin's region-grouped rows - falls back to a
- *  visible "Other" bucket (rather than silently dropping the state)
- *  if a state is ever added to the mock data without updating
- *  hazardData.ts's STATE_REGION map. */
+ *  Daily National Bulletin's region-grouped rows.
+ *
+ *  Tries an exact match against STATE_REGION first (covers every official
+ *  individual state name, plus the known real-data merged names explicitly
+ *  added there - see that map's own comment). If a state string still
+ *  doesn't match exactly - e.g. a real Indus circle's merged name in a
+ *  punctuation/wording variant nobody's added explicitly yet - falls back
+ *  to finding whichever individual state name from STATE_REGION appears
+ *  INSIDE the string (so "X & Y" or "X and Y" style names still resolve to
+ *  their real region as long as X or Y is a known key). Only lands in the
+ *  visible "Other" bucket (rather than silently dropping the state) when
+ *  neither match finds anything. */
 export function regionOf(state: string): string {
-  return STATE_REGION[state] ?? 'Other';
+  if (STATE_REGION[state]) return STATE_REGION[state];
+  const containedKey = Object.keys(STATE_REGION).find((key) => state.includes(key));
+  return containedKey ? STATE_REGION[containedKey] : 'Other';
 }
 
 /**
@@ -215,6 +228,126 @@ export function buildForecastParameterMatrix(
   return result;
 }
 
+/**
+ * Skymet-sourced counterpart to buildForecastParameterMatrix above - same
+ * shape and worst-across-the-group logic, but reading straight off the
+ * real per-day Skymet vendor feed (see useSkymetSevenDayForecast) instead
+ * of anything derived from hourly_weather. Added 2026-09-22 for the
+ * Alerts/Reports migration off the old hourly-derived 7-day figures, per
+ * an explicit request: "reports sections(tower risk,daily national
+ * bulletin and circle bulletin)... all works on 7 days forecast table not
+ * hourly wise okay." `rainfall` uses Skymet's own daily rainfall amount,
+ * `temperature` its daily max, and `windSpeed` its daily max wind speed -
+ * the three parameters Skymet's own schema actually reports (see that
+ * hook's own doc comment for why nothing else is sourced from here). A
+ * site with no Skymet match for that day (its district never matched any
+ * Skymet row) is simply left out of the average, never treated as a zero.
+ */
+export function buildSkymetParameterMatrix(
+  sites: Site[],
+  days: SkymetDaySnapshot[],
+  parameter: 'rainfall' | 'temperature' | 'windSpeed',
+  groupBy: (site: Site) => string | null
+): SeverityMatrix {
+  const result: SeverityMatrix = { warning: [], alert: [], watch: [] };
+
+  days.forEach((day) => {
+    const worstByGroup = new Map<string, RiskLevel>();
+    sites.forEach((site) => {
+      const forecastDay = day.bySiteId[site.id];
+      if (!forecastDay) return;
+      const group = groupBy(site);
+      if (!group) return;
+      const value =
+        parameter === 'rainfall'
+          ? forecastDay.rainfallMm
+          : parameter === 'temperature'
+          ? forecastDay.tempMaxC
+          : forecastDay.windSpeedKmh;
+      if (value === null || value === undefined) return;
+      const risk = getParameterRisk(parameter, value);
+      worstByGroup.set(group, worseRisk(worstByGroup.get(group) ?? 'none', risk));
+    });
+
+    BULLETIN_SEVERITIES.forEach((sev) => {
+      const names = Array.from(worstByGroup.entries())
+        .filter(([, risk]) => risk === sev)
+        .map(([name]) => name)
+        .sort();
+      result[sev].push(names);
+    });
+  });
+
+  return result;
+}
+
+/**
+ * Skymet-sourced counterpart to BULLETIN_HAZARD_PERILS/buildHazardRow below
+ * - the three hazard perils (Landslide, Avalanche, Snowfall) whose classify
+ * functions in severity.ts already take plain numeric primitives
+ * (elevation, temperature, wind, rainfall) rather than a full
+ * CurrentObservation, so they can be fed Skymet's own daily max temperature/
+ * max wind speed/rainfall amount directly and honestly - no fabricated
+ * field stands in for anything Skymet doesn't report. `classify` returns
+ * null (rather than a guessed risk) when a day's Skymet figures don't cover
+ * what that peril needs, and buildSkymetHazardRow below simply leaves that
+ * site out of the day's aggregation rather than defaulting it to "none".
+ */
+export interface SkymetHazardPerilConfig {
+  key: string;
+  label: string;
+  classify: (day: SkymetForecastDay, site: Site) => RiskLevel | null;
+}
+
+export const SKYMET_BULLETIN_HAZARD_PERILS: SkymetHazardPerilConfig[] = [
+  {
+    key: 'landslide',
+    label: 'Landslide',
+    classify: (d, s) => (d.rainfallMm == null ? null : getLandslideRisk(s.elevationMeters, d.rainfallMm)),
+  },
+  {
+    key: 'avalanche',
+    label: 'Avalanche',
+    // A missing windSpeedKmh is treated as calm (0) rather than bailing out
+    // to null - wind is only a boost on top of the snow/elevation/
+    // temperature base score (see getAvalancheRisk), so a real fraction of
+    // Skymet rows having a null wind_spd shouldn't blank out an otherwise-
+    // real estimate. Fixed 2026-09-22 alongside the identical bug in Tower
+    // Risk's ShortLongRangeForecast.tsx, found while chasing a report that
+    // Avalanche still showed "N/A" even after being migrated onto Skymet.
+    classify: (d, s) => (d.tempMaxC == null ? null : getAvalancheRisk(s.elevationMeters, d.tempMaxC, d.windSpeedKmh ?? 0)),
+  },
+  {
+    key: 'snowfall',
+    label: 'Snowfall',
+    classify: (d, s) => (d.tempMaxC == null ? null : getSnowfallRisk(s.elevationMeters, d.tempMaxC)),
+  },
+];
+
+export function buildSkymetHazardRow(
+  sites: Site[],
+  days: SkymetDaySnapshot[],
+  peril: SkymetHazardPerilConfig,
+  groupBy: (site: Site) => string | null
+): HazardEntry[][] {
+  return days.map((day) => {
+    const worstByGroup = new Map<string, RiskLevel>();
+    sites.forEach((site) => {
+      const forecastDay = day.bySiteId[site.id];
+      if (!forecastDay) return;
+      const group = groupBy(site);
+      if (!group) return;
+      const risk = peril.classify(forecastDay, site);
+      if (risk === null) return;
+      worstByGroup.set(group, worseRisk(worstByGroup.get(group) ?? 'none', risk));
+    });
+    return Array.from(worstByGroup.entries())
+      .filter((entry): entry is [string, BulletinSeverity] => entry[1] !== 'none')
+      .map(([name, severity]) => ({ name, severity }))
+      .sort((a, b) => RISK_RANK[b.severity] - RISK_RANK[a.severity] || a.name.localeCompare(b.name));
+  });
+}
+
 /** One hazard-peril row's cell: every affected group that day, each
  *  carrying its OWN severity (unlike the Rain/Wind matrix's one-row-per-
  *  severity shape) - matches the SOW sample's Hazard Prediction table,
@@ -233,14 +366,19 @@ export interface HazardPerilConfig {
 }
 
 // Cyclone is prepended separately (buildCycloneHazardRow below) since it
-// isn't a per-site/per-observation reading like these five - it comes from
-// the single tracked demo system's own district-warning list instead. Fog
-// isn't part of this list even though it's tracked elsewhere in the app
-// (Live Map, Alerts) - the SOW's own Hazard Prediction sample doesn't
-// include it, and this bulletin is built to match that sample.
+// isn't a per-site/per-observation reading like these three - it comes from
+// getActiveCyclone(), which returns null until a real IMD/JTWC feed is wired
+// in (no fabricated cyclone data). Fog isn't part of this list even though
+// it's tracked elsewhere in the app (Live Map, Alerts) - the SOW's own
+// Hazard Prediction sample doesn't include it, and this bulletin is built to
+// match that sample. Lightning and Flooding were removed on 2026-09-21 (on
+// request: "remove demo data") for the same reason Cyclone shows nothing
+// rather than a guess: the real hourly_weather schema has no
+// lightning-detection or flood/hydrology column, so both were only ever
+// derived proxies from rainfall/wind (getFloodRisk is rainfall reused under
+// a different name), not real hazard readings. They'll come back once real
+// hazard data is supplied.
 export const BULLETIN_HAZARD_PERILS: HazardPerilConfig[] = [
-  { key: 'lightning', label: 'Lightning', classify: (o) => getParameterRisk('lightning', o.lightningStrikesLastHour) },
-  { key: 'flooding', label: 'Flooding', classify: (o, s) => getFloodRisk(s, o) },
   { key: 'landslide', label: 'Landslide', classify: (o, s) => getLandslideRisk(s.elevationMeters, o.rainfallLastHour) },
   { key: 'avalanche', label: 'Avalanche', classify: (o, s) => getAvalancheRisk(s.elevationMeters, o.temperature, o.windSpeed) },
   { key: 'snowfall', label: 'Snowfall', classify: (o, s) => getSnowfallRisk(s.elevationMeters, o.temperature) },
@@ -281,7 +419,14 @@ export function buildHazardRow(
  */
 export function buildCycloneHazardRow(
   cyclone: CycloneSystem | null,
-  days: ForecastDaySnapshot[],
+  // Widened to a minimal `{ at: string }[]` (rather than the specific
+  // ForecastDaySnapshot type) so this same function keeps working
+  // unchanged when a caller passes the Skymet-sourced SkymetDaySnapshot[]
+  // instead (see useSkymetSevenDayForecast's own `at` field, computed the
+  // same "real calendar day" way regardless of data source) - the cyclone
+  // system itself has nothing to do with either hourly or Skymet data, it
+  // only needs each day's real calendar date to line up its own track.
+  days: { at: string }[],
   groupNameForDistrict: (district: string, state: string) => string | null
 ): HazardEntry[][] {
   if (!cyclone) return days.map(() => []);
@@ -323,7 +468,35 @@ export function buildCircleHeadlines(circleLabel: string, sites: Site[], days: F
     });
     return worst;
   });
+  return headlinesFromDayRisk(circleLabel, dayRisk, days);
+}
 
+/**
+ * Skymet-sourced counterpart to buildCircleHeadlines above, using each
+ * day's real Skymet rainfall amount instead of an hourly noon snapshot -
+ * added 2026-09-22 for the Daily Circle Bulletin's migration off the old
+ * hourly-derived figures. Shares the actual headline-wording logic with
+ * buildCircleHeadlines via headlinesFromDayRisk below, so the two can never
+ * disagree about what a given day-risk sequence should say.
+ */
+export function buildSkymetCircleHeadlines(circleLabel: string, sites: Site[], days: SkymetDaySnapshot[]): string[] {
+  const dayRisk: RiskLevel[] = days.map((day) => {
+    let worst: RiskLevel = 'none';
+    sites.forEach((site) => {
+      const forecastDay = day.bySiteId[site.id];
+      if (!forecastDay || forecastDay.rainfallMm == null) return;
+      worst = worseRisk(worst, getParameterRisk('rainfall', forecastDay.rainfallMm));
+    });
+    return worst;
+  });
+  return headlinesFromDayRisk(circleLabel, dayRisk, days);
+}
+
+/** Shared tail of buildCircleHeadlines/buildSkymetCircleHeadlines - the
+ *  actual two-line headline wording, given each day's already-computed
+ *  worst rainfall risk. `days` here only needs a `label` per entry (used
+ *  for the "from {label}" step-up sentence). */
+function headlinesFromDayRisk(circleLabel: string, dayRisk: RiskLevel[], days: { label: string }[]): string[] {
   const headlines: string[] = [];
   const shortRisk = dayRisk.slice(0, 3);
   if (shortRisk.every((r) => r === 'none')) {

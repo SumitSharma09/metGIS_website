@@ -16,10 +16,12 @@ import Chip from '@mui/material/Chip';
 import dayjs from 'dayjs';
 import PictureAsPdfRoundedIcon from '@mui/icons-material/PictureAsPdfRounded';
 import { EmptyState } from '@/components/common/EmptyState';
-import { RISK_COLOR, worseRisk, type RiskLevel } from '@/utils/severity';
+import { RISK_COLOR, worseRisk, getSnowfallRisk, getAvalancheRisk, getParameterRisk, type RiskLevel } from '@/utils/severity';
 import { getActiveCyclone, CYCLONE_WARNING_LABEL } from '@/pages/hazards/hazardData';
 import type { Site } from '@/features/sites/types';
+import type { SkymetForecastDay } from '@/features/weather/types';
 import type { ForecastDaySnapshot } from '../useSevenDayObservations';
+import type { SkymetDaySnapshot } from '../useSkymetSevenDayForecast';
 import { FORECAST_PARAMETERS, NO_DATA_CELL, type ForecastParameterKey, type ForecastCell } from '../forecastParameters';
 import { exportShortLongRangeToPdf } from '../exportUtils';
 
@@ -27,9 +29,86 @@ interface ShortLongRangeForecastProps {
   sites: Site[];
   /** Exactly 7 entries (offset 0-6), from useSevenDayObservations - offsets
    *  0-2 render under "Short-Range" and 3-6 under "Long-Range", matching
-   *  the scope document's own 3-day-short / 4-more-day-long column split. */
+   *  the scope document's own 3-day-short / 4-more-day-long column split.
+   *  Still the source for Humidity, Visibility, Lightning, Flood and Fog -
+   *  see `skymetDays` below for why those five stay on this hourly source. */
   days: ForecastDaySnapshot[];
+  /** Real per-day Skymet vendor outlook (same 7 offsets, same calendar
+   *  days as `days` above) - the source for Rainfall, Temperature, Wind
+   *  Speed, Flood, Fog, Avalanche and Snowfall (see
+   *  SKYMET_MEASUREMENT_VALUE/SKYMET_HAZARD_CLASSIFY below; there is no
+   *  Landslide tab in this table at all, only in the Bulletins). Every
+   *  tower in a district shows that SAME district's Skymet figure (Skymet
+   *  is a per-district, not per-tower, feed - see
+   *  useSkymetSevenDayForecast's own doc comment).
+   *  <p>
+   *  Flood and Fog were added to this Skymet-sourced group on 2026-09-22,
+   *  after a report that they (along with Avalanche) always showed "N/A"
+   *  in this table: Flood already had no per-site logic of its own -
+   *  `getFloodRisk` is pure `getParameterRisk('rainfall', ...)` - so it
+   *  reads Skymet's own daily rainfall figure exactly the way Landslide
+   *  already does in the Bulletins. Fog has no numeric Skymet field at all
+   *  (no visibility measurement), but Skymet's own day `description`/
+   *  `icon`/`raintext` text is still real vendor data and often names fog/
+   *  mist/haze conditions explicitly - reusing that text (see
+   *  `classifyFogFromSkymetText` below) is a genuine derivation from a real
+   *  field, not an invented visibility number. Humidity, Visibility and
+   *  Lightning still have no Skymet equivalent of any kind (numeric or
+   *  textual) and remain on `days` above. */
+  skymetDays: SkymetDaySnapshot[];
 }
+
+/** Rainfall/Temperature/Wind Speed tabs read straight off Skymet's own
+ *  daily figures - rainfall amount, max temperature, max wind speed
+ *  respectively - the three measurement parameters Skymet's schema
+ *  actually reports (see useSkymetSevenDayForecast's doc comment). */
+const SKYMET_MEASUREMENT_VALUE: Partial<Record<ForecastParameterKey, (d: SkymetForecastDay) => number | null>> = {
+  rainfall: (d) => d.rainfallMm,
+  temperature: (d) => d.tempMaxC,
+  windSpeed: (d) => d.windSpeedKmh,
+};
+
+/** Fog has no numeric Skymet field (no visibility figure) - Skymet's own
+ *  textual weather description/icon/rain-text for the day IS still real
+ *  vendor data though, and often names fog/mist/haze conditions explicitly
+ *  (e.g. description "Foggy", icon "fog"). Reusing that real text is a
+ *  genuine derivation, not a fabricated number - unlike inventing a
+ *  visibility-km estimate Skymet never reported. Returns 'none' (never
+ *  null) whenever the day matched but its text doesn't mention fog/mist/
+ *  haze - that's a real "vendor didn't forecast fog" reading. A true
+ *  NO_DATA_CELL only happens when `d` itself is absent (the district never
+ *  matched a Skymet row for that day at all), handled by the caller before
+ *  this function is ever called. */
+function classifyFogFromSkymetText(d: SkymetForecastDay): RiskLevel {
+  const text = `${d.description} ${d.icon} ${d.raintext}`.toLowerCase();
+  if (text.includes('fog')) return 'alert';
+  if (text.includes('mist') || text.includes('haze')) return 'watch';
+  return 'none';
+}
+
+/** Flood/Fog/Snowfall/Avalanche are the four Tower Risk hazard tabs whose
+ *  classify functions (severity.ts, or classifyFogFromSkymetText above) take
+ *  plain numeric/textual primitives rather than a full CurrentObservation,
+ *  so they can be fed Skymet's own daily rainfall/max temperature/max wind
+ *  speed/description directly and honestly. (Landslide isn't a tab in this
+ *  table at all - only the Bulletins have a Landslide row.) Returns null
+ *  (never a guessed risk) when a day's Skymet figures don't cover what the
+ *  peril needs - Flood is the only one of these four that can still fall
+ *  through to NO_DATA_CELL this way (a day with no rainfall figure at all);
+ *  Fog always resolves to a real RiskLevel once `d` exists, per
+ *  classifyFogFromSkymetText's own doc comment. Avalanche treats a missing
+ *  windSpeedKmh as calm (0) rather than bailing out entirely - wind is only
+ *  a boost on top of the snow/elevation/temperature base score (see
+ *  getAvalancheRisk), so a missing wind reading shouldn't blank out an
+ *  otherwise-real estimate; this was the actual cause of Avalanche still
+ *  showing "N/A" even after it was first migrated onto Skymet, since
+ *  Skymet's wind_spd column is null for a real fraction of rows. */
+const SKYMET_HAZARD_CLASSIFY: Partial<Record<ForecastParameterKey, (d: SkymetForecastDay, site: Site) => RiskLevel | null>> = {
+  flood: (d) => (d.rainfallMm == null ? null : getParameterRisk('rainfall', d.rainfallMm)),
+  fog: (d) => classifyFogFromSkymetText(d),
+  snowfall: (d, s) => (d.tempMaxC == null ? null : getSnowfallRisk(s.elevationMeters, d.tempMaxC)),
+  avalanche: (d, s) => (d.tempMaxC == null ? null : getAvalancheRisk(s.elevationMeters, d.tempMaxC, d.windSpeedKmh ?? 0)),
+};
 
 /**
  * The scope document's "Short and Long-Range Prediction" sample: a
@@ -43,11 +122,20 @@ interface ShortLongRangeForecastProps {
  * instead of the shared grid). "Download PDF" exports every tab (one per
  * page) in one branded document.
  */
-export function ShortLongRangeForecast({ sites, days }: ShortLongRangeForecastProps) {
+export function ShortLongRangeForecast({ sites, days, skymetDays }: ShortLongRangeForecastProps) {
   const [paramKey, setParamKey] = useState<ForecastParameterKey>('rainfall');
 
   const districts = useMemo(() => Array.from(new Set(sites.map((s) => s.district))).sort(), [sites]);
   const siteById = useMemo(() => new Map(sites.map((s) => [s.id, s])), [sites]);
+  const sitesByDistrict = useMemo(() => {
+    const map = new Map<string, Site[]>();
+    sites.forEach((s) => {
+      const list = map.get(s.district);
+      if (list) list.push(s);
+      else map.set(s.district, [s]);
+    });
+    return map;
+  }, [sites]);
 
   const shortDays = days.slice(0, 3);
   const longDays = days.slice(3, 7);
@@ -69,8 +157,47 @@ export function ShortLongRangeForecast({ sites, days }: ShortLongRangeForecastPr
     FORECAST_PARAMETERS.forEach((param) => {
       if (param.kind === 'cyclone') return; // has no per-district grid
       result[param.key] = {};
+      const skymetValueFor = SKYMET_MEASUREMENT_VALUE[param.key];
+      const skymetClassifyFor = SKYMET_HAZARD_CLASSIFY[param.key];
+
       districts.forEach((district) => {
-        result[param.key][district] = allDays.map((day) => {
+        const districtSites = sitesByDistrict.get(district) ?? [];
+
+        result[param.key][district] = allDays.map((day, dayIndex) => {
+          // Rainfall/Temperature/Wind Speed (measurement) and Snowfall/
+          // Avalanche (hazard) are sourced from the real Skymet per-day
+          // outlook, shared identically by every tower in the district -
+          // see skymetDays' own doc comment on the props interface above.
+          if (skymetValueFor && param.kind === 'measurement') {
+            const skymetDay = skymetDays[dayIndex];
+            const values = districtSites
+              .map((s) => skymetDay?.bySiteId[s.id])
+              .filter((d): d is SkymetForecastDay => Boolean(d))
+              .map((d) => skymetValueFor(d))
+              .filter((v): v is number => v !== null);
+            if (values.length === 0) return NO_DATA_CELL;
+            const avg = values.reduce((a, b) => a + b, 0) / values.length;
+            return { band: param.getBand(avg), display: `${avg.toFixed(1)} ${param.unit}` };
+          }
+
+          if (skymetClassifyFor && param.kind === 'hazard') {
+            const skymetDay = skymetDays[dayIndex];
+            let worst: RiskLevel | null = null;
+            districtSites.forEach((s) => {
+              const d = skymetDay?.bySiteId[s.id];
+              if (!d) return;
+              const risk = skymetClassifyFor(d, s);
+              if (risk !== null) worst = worst ? worseRisk(worst, risk) : risk;
+            });
+            if (worst === null) return NO_DATA_CELL;
+            const band = param.legend.find((b) => b.level === worst) ?? param.legend[param.legend.length - 1];
+            return { band, display: band.label };
+          }
+
+          // Everything else (Humidity, Visibility, Lightning) - Skymet's own
+          // schema has no numeric or textual field for any of these, so
+          // they stay honestly sourced from the hourly noon-snapshot
+          // observations rather than showing a fabricated figure.
           const districtObs = day.observations.filter((o) => siteById.get(o.siteId)?.district === district);
           if (districtObs.length === 0) return NO_DATA_CELL;
 
@@ -94,7 +221,7 @@ export function ShortLongRangeForecast({ sites, days }: ShortLongRangeForecastPr
       });
     });
     return result;
-  }, [districts, allDays, siteById]);
+  }, [districts, allDays, siteById, sitesByDistrict, skymetDays]);
 
   if (districts.length === 0) {
     return <EmptyState message="No sites match the selected region." />;
@@ -248,7 +375,7 @@ export function ShortLongRangeForecast({ sites, days }: ShortLongRangeForecastPr
                   align="center"
                   sx={{ fontWeight: 700, backgroundColor: 'action.selected' }}
                 >
-                  Long-Range Prediction (7 Days)
+                  Long-Range Prediction (4 Days)
                 </TableCell>
               </TableRow>
               <TableRow>

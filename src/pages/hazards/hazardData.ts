@@ -159,9 +159,16 @@ export function buildHazardRiskRows(
   obsBySiteId: Record<string, CurrentObservation>,
   cyclone: CycloneSystem | null
 ): RiskIntensityRow[] {
+  // Lightning and Flood were removed from this table on 2026-09-21 (on
+  // request: "remove demo data") - both were only ever derived proxies from
+  // rainfall/wind (see getFloodRisk and IndusWeatherMapper.deriveLightning
+  // on the backend), never real sensor/gauge readings, since the real
+  // hourly_weather schema has no lightning-detection or flood/hydrology
+  // column. Same treatment already given to Cyclone below: show nothing
+  // rather than a guessed reading, until real hazard data is supplied.
+  // getFloodRisk itself stays exported - HazardMap.tsx's live Flood layer
+  // toggle still uses it.
   const rows = toRows(sites, obsBySiteId, [
-    { key: 'lightning', label: 'Lightning', riskFn: (_s, o) => getParameterRisk('lightning', o.lightningStrikesLastHour) },
-    { key: 'flood', label: 'Flood', riskFn: getFloodRisk },
     { key: 'fog', label: 'Fog', riskFn: (_s, o) => layerRisk('fog', o) },
     { key: 'snowfall', label: 'Snowfall', riskFn: (s, o) => layerRisk('snowfall', o, s) },
     { key: 'avalanche', label: 'Avalanche', riskFn: (s, o) => layerRisk('avalanche', o, s) },
@@ -223,6 +230,23 @@ export const STATE_REGION: Record<string, string> = {
   Odisha: 'East',
   Punjab: 'North',
   Uttarakhand: 'North',
+  // The real Indus dataset's `indus_locations.state` column doesn't always
+  // hold a single official state name - some circles store a merged name
+  // for the two (same-region) states they cover (e.g. "Bihar & Jharkhand",
+  // "Madhya Pradesh & Chhattisgarh"), and Jammu & Kashmir shows up in more
+  // than one punctuation/wording variant. Every merged name below combines
+  // states that are already the SAME region above (Bihar/Jharkhand -> East,
+  // Madhya Pradesh/Chhattisgarh -> Central), so this isn't a new judgment
+  // call, just recognizing the real dataset's own naming for the same
+  // regions. regionOf() below also falls back to a substring match against
+  // this map's individual keys, so a merged name not explicitly listed here
+  // still resolves correctly instead of landing in "Other".
+  'Jammu and Kashmir': 'North',
+  'Jammu & Kashmir': 'North',
+  'Jammu Kashmir': 'North',
+  Ladakh: 'North',
+  'Bihar & Jharkhand': 'East',
+  'Madhya Pradesh & Chhattisgarh': 'Central',
 };
 
 const RAINFALL_OUTLOOK_LABEL: Record<RiskLevel, string> = {

@@ -111,6 +111,26 @@ export function getParameterRisk(parameter: WeatherParameter, value: number): Ri
   return 'none';
 }
 
+/** The numeric threshold a parameter's value has to reach for a given
+ *  RiskLevel band, read straight from this file's own BANDS table (or the
+ *  pressure special-case) instead of a second, hand-copied set of numbers -
+ *  added for the Skymet-based forecast alert feed
+ *  (src/pages/alerts/useSkymetForecastAlerts.ts), which needs to show
+ *  "predicted X, band starts at Y" without re-stating BANDS' thresholds
+ *  anywhere else. Returns null for 'none' (no lower bound to show) or for a
+ *  parameter/level pair BANDS has no finite entry for. */
+export function getParameterThreshold(parameter: WeatherParameter, level: RiskLevel): number | null {
+  if (level === 'none') return null;
+  if (parameter === 'pressure') {
+    if (level === 'warning') return 990;
+    if (level === 'alert') return 995;
+    if (level === 'watch') return 1000;
+    return null;
+  }
+  const band = (BANDS[parameter] ?? []).find((b) => b.level === level);
+  return band && Number.isFinite(band.min) ? band.min : null;
+}
+
 /** Synthetic cloud-cover percentage derived from the observed condition
  *  (the mock weather generator doesn't track cloud % directly). */
 export function estimateCloudCoverPercent(condition: WeatherCondition): number {

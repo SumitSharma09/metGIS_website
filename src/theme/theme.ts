@@ -1,4 +1,9 @@
-import { createTheme, type ThemeOptions, type PaletteMode } from '@mui/material/styles';
+import { createTheme, type ThemeOptions } from '@mui/material/styles';
+// PaletteMode is exported from the @mui/material barrel, not from
+// @mui/material/styles, on the installed @mui/material@5.16.7 - importing
+// it from /styles compiled fine in whichever dev environment this was
+// originally written in, but fails on this project's actual pinned version.
+import type { PaletteMode } from '@mui/material';
 
 const getDesignTokens = (mode: PaletteMode): ThemeOptions => ({
   palette: {

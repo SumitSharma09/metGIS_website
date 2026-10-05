@@ -166,6 +166,7 @@ export const FORECAST_PARAMETERS: ForecastParameterConfig[] = [
     getValue: (o) => o.rainfallLastHour,
     getBand: rainfallBand,
     legend: RAINFALL_BANDS,
+    note: 'District-level figure from the 7-day forecast, shared by every tower in the district (not an hourly reading).',
   },
   {
     key: 'temperature',
@@ -176,6 +177,7 @@ export const FORECAST_PARAMETERS: ForecastParameterConfig[] = [
     getValue: (o) => o.temperature,
     getBand: (v) => riskBand(getParameterRisk('temperature', v), ''),
     legend: (LAYER_LEGEND.temperature ?? []).map((b) => riskBand(b.level, b.rangeLabel)),
+    note: 'District-level daily max from the 7-day forecast, shared by every tower in the district (not an hourly reading).',
   },
   {
     key: 'windSpeed',
@@ -186,6 +188,7 @@ export const FORECAST_PARAMETERS: ForecastParameterConfig[] = [
     getValue: (o) => o.windSpeed,
     getBand: (v) => riskBand(getParameterRisk('windSpeed', v), ''),
     legend: (LAYER_LEGEND.wind ?? []).map((b) => riskBand(b.level, b.rangeLabel)),
+    note: 'District-level daily max from the 7-day forecast, shared by every tower in the district (not an hourly reading).',
   },
   {
     key: 'humidity',
@@ -224,7 +227,7 @@ export const FORECAST_PARAMETERS: ForecastParameterConfig[] = [
     icon: <WavesRoundedIcon fontSize="small" />,
     classify: (obs, site) => getFloodRisk(site, obs),
     legend: (LAYER_LEGEND.rainfall ?? []).map((b) => riskBand(b.level, b.rangeLabel)),
-    note: 'Derived from rainfall - no separate hydrological model behind this yet.',
+    note: 'Derived from rainfall - no separate hydrological model behind this yet. In the Short/Long-Range table this reads the district-level 7-day forecast rainfall, not an hourly reading.',
   },
   {
     key: 'fog',
@@ -233,6 +236,7 @@ export const FORECAST_PARAMETERS: ForecastParameterConfig[] = [
     icon: <BlurOnRoundedIcon fontSize="small" />,
     classify: (obs) => (obs.condition === 'fog' ? getVisibilityRisk(obs.visibilityKm) : 'none'),
     legend: (LAYER_LEGEND.fog ?? []).map((b) => riskBand(b.level, b.rangeLabel)),
+    note: 'No numeric visibility figure exists in the 7-day forecast feed - in the Short/Long-Range table this is derived from the forecast’s own day description text (fog/mist/haze), not a measurement.',
   },
   {
     key: 'snowfall',
@@ -241,7 +245,7 @@ export const FORECAST_PARAMETERS: ForecastParameterConfig[] = [
     icon: <AcUnitRoundedIcon fontSize="small" />,
     classify: (obs, site) => getSnowfallRisk(site.elevationMeters, obs.temperature),
     legend: QUALITATIVE_LEGEND,
-    note: 'Elevation- and temperature-dependent, not a single numeric threshold.',
+    note: 'Elevation-dependent, using the district-level 7-day forecast temperature (not a single numeric threshold or an hourly reading).',
   },
   {
     key: 'avalanche',
@@ -250,7 +254,7 @@ export const FORECAST_PARAMETERS: ForecastParameterConfig[] = [
     icon: <TerrainRoundedIcon fontSize="small" />,
     classify: (obs, site) => getAvalancheRisk(site.elevationMeters, obs.temperature, obs.windSpeed),
     legend: QUALITATIVE_LEGEND,
-    note: 'Elevation, temperature and wind combined, not a single numeric threshold.',
+    note: 'Elevation-dependent, using the district-level 7-day forecast temperature and wind (not a single numeric threshold or an hourly reading).',
   },
   {
     key: 'cyclone',

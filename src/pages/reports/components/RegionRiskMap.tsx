@@ -7,6 +7,8 @@ import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
+import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import { MapContainer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { buildDistrictRiskIndex, normalizeName, splitCircleStateName } from '@/utils/districtRisk';
@@ -58,6 +60,15 @@ interface RegionRiskMapProps {
   /** Clicking a district on the map drives the same State/District filters
    *  the Autocompletes above use, so the two stay in sync either way. */
   onSelectDistrict: (districtName: string, stateName: string) => void;
+  /** Resets whatever State/District the map click (or the page's own
+   *  Autocompletes) currently has selected, back to the nationwide view.
+   *  Rendered as a small back/close chip overlaid directly on the map -
+   *  added per explicit report: after clicking a district here, there was no
+   *  visible "previous"/close control to get back out to "All India" short
+   *  of hunting for the (hover-only) clear icon on the Autocompletes above
+   *  the map. Optional so this component still works for any caller that
+   *  doesn't want the affordance. */
+  onClearSelection?: () => void;
 }
 
 /**
@@ -73,7 +84,7 @@ interface RegionRiskMapProps {
  * `useDistrictBoundariesForStates`) rather than re-implementing them, so
  * both pages agree on district names, aliases, and risk coloring.
  */
-export function RegionRiskMap({ sites, days, state, district, onSelectDistrict }: RegionRiskMapProps) {
+export function RegionRiskMap({ sites, days, state, district, onSelectDistrict, onClearSelection }: RegionRiskMapProps) {
   const [dayOffset, setDayOffset] = useState(0);
 
   // Every government-recognized state/UT the signed-in user is RBAC-allowed
@@ -187,6 +198,22 @@ export function RegionRiskMap({ sites, days, state, district, onSelectDistrict }
             );
           })}
         </MapContainer>
+
+        {/* Back/close control - appears the instant a district (or state) is
+            in scope, whether that happened via a map click or the page's own
+            Autocompletes, and clears it back to the nationwide view. See the
+            prop's own doc comment above for why this was added. */}
+        {state && onClearSelection && (
+          <Chip
+            icon={<ArrowBackRoundedIcon fontSize="small" />}
+            deleteIcon={<CloseRoundedIcon fontSize="small" />}
+            onDelete={onClearSelection}
+            onClick={onClearSelection}
+            label={district ? `${district}, ${state}` : state}
+            size="small"
+            sx={{ position: 'absolute', top: 12, left: 12, zIndex: 1000, bgcolor: 'background.paper', cursor: 'pointer' }}
+          />
+        )}
 
         {anyBoundaryLoading && (
           <Chip

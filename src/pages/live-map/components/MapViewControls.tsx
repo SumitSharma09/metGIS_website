@@ -17,11 +17,33 @@ interface MapViewControlsProps {
   onChangeBasemap: (basemap: Basemap) => void;
   showTowers: boolean;
   onToggleTowers: (show: boolean) => void;
+  /** Whether the "Indus" switch itself is shown at all - added 2026-09-30
+   *  per explicit request ("Indus show after some click state or choose
+   *  state then indus section show other default live-map hide the indus
+   *  section"): LiveMapPage passes `Boolean(state)`, so the switch is
+   *  missing entirely on the plain nationwide map and appears once a state
+   *  is picked. Previously the switch was always visible and simply
+   *  defaulted off, which still let it be flipped on nationwide (and, per
+   *  LiveMapPage's own doc comment on `showTowers`, trigger a full-tower
+   *  nationwide weather fetch) - hiding it removes that path rather than
+   *  just discouraging it. Same pattern as `showInfoButton` below. */
+  showTowersToggle: boolean;
   /** Opens the network-wide "Weather details" panel (see LiveMapPage /
    *  NetworkWeatherPanel) - matching the reference product, where this same
    *  (i) button is what shows live tower/weather info and jumps to Alerts
    *  and Reports, rather than a static help blurb. */
   onOpenInfo: () => void;
+  /** Whether the (i) button itself is shown at all - added 2026-09-24 per
+   *  explicit request ("if someone not click and not select the state in a
+   *  live-map they hide the info button ... if someone select state and
+   *  click ... then unhide"), then corrected the same day per a follow-up
+   *  ("not in state select and without state. only applicable this button
+   *  district") - a bare state selection must NOT unhide it. LiveMapPage
+   *  passes `Boolean(district)`: the button stays hidden on the plain
+   *  nationwide map AND while only a state is picked, appearing only once a
+   *  specific DISTRICT has been selected (map click, the district search
+   *  dropdown, or a tower click - all of which set `district`). */
+  showInfoButton: boolean;
   fullscreenTargetRef: RefObject<HTMLElement>;
   right?: number;
 }
@@ -37,7 +59,9 @@ export function MapViewControls({
   onChangeBasemap,
   showTowers,
   onToggleTowers,
+  showTowersToggle,
   onOpenInfo,
+  showInfoButton,
   fullscreenTargetRef,
   right = 12,
 }: MapViewControlsProps) {
@@ -84,21 +108,34 @@ export function MapViewControls({
         </ToggleButton>
       </ToggleButtonGroup>
 
-      <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
+      {showTowersToggle && (
+        <>
+          <Divider orientation="vertical" flexItem sx={{ mx: 0.25 }} />
 
-      <ToggleButton
-        value="towers"
-        size="small"
-        selected={showTowers}
-        onChange={() => onToggleTowers(!showTowers)}
-        sx={BUTTON_SX}
-      >
-        <CellTowerRoundedIcon fontSize="small" /> Towers
-      </ToggleButton>
+          {/* Labeled "Indus" on screen (renamed from "Towers" per explicit
+              request) - internal prop/state names (showTowers/onToggleTowers)
+              are left unchanged, same as this project's earlier "Tower Risk
+              Reports" -> "Districts Risk Reports" rename, which only touched
+              user-facing text and left internal names alone. Hidden entirely
+              (not just off) on the nationwide map - see `showTowersToggle`'s
+              own doc comment above. */}
+          <ToggleButton
+            value="towers"
+            size="small"
+            selected={showTowers}
+            onChange={() => onToggleTowers(!showTowers)}
+            sx={BUTTON_SX}
+          >
+            <CellTowerRoundedIcon fontSize="small" /> Indus
+          </ToggleButton>
+        </>
+      )}
 
-      <IconButton size="small" onClick={onOpenInfo}>
-        <InfoRoundedIcon fontSize="small" />
-      </IconButton>
+      {showInfoButton && (
+        <IconButton size="small" onClick={onOpenInfo}>
+          <InfoRoundedIcon fontSize="small" />
+        </IconButton>
+      )}
       <IconButton size="small" onClick={toggleFullscreen}>
         {isFullscreen ? <FullscreenExitRoundedIcon fontSize="small" /> : <FullscreenRoundedIcon fontSize="small" />}
       </IconButton>

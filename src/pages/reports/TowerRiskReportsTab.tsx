@@ -17,12 +17,25 @@ import { useScopedStates } from '@/features/users/useScopedStates';
 import { useVisibleStates } from '@/pages/live-map/useDistrictBoundaries';
 import { useGetCurrentObservationsQuery } from '@/features/weather/weatherApi';
 import { useSevenDayObservations } from './useSevenDayObservations';
+import { useSkymetSevenDayForecast } from './useSkymetSevenDayForecast';
 import { computeOverallRisk } from './riskAggregation';
 import { SiteRiskTable, type SiteRiskRow } from './components/SiteRiskTable';
 import { RiskDistributionCharts } from './components/RiskDistributionCharts';
-import { RegionRiskMap } from './components/RegionRiskMap';
 import { ShortLongRangeForecast } from './components/ShortLongRangeForecast';
 import { exportSiteRiskToExcel, exportSiteRiskToPdf } from './exportUtils';
+
+// This table needs EVERY real site in scope to group correctly by district -
+// the previous pageSize (200) only ever returned the first N rows the
+// backend's default (unsorted-by-district) order happened to return, which
+// meant this whole tab showed only whichever 2-3 districts those first rows
+// fell in (e.g. "Agar Malwa") EVERY time, nationwide, regardless of how many
+// real districts actually exist - not dummy data, just a pagination cap that
+// silently truncated the real dataset. Fixed 2026-09-22 per explicit report:
+// "why they show me agar malwa or 2-3 district every time". Same "give me
+// every site" pattern already used for the Alerts page's forecast feed
+// (useSkymetForecastAlerts.ts) - the real indus_locations table has
+// 57,000+ rows and the backend applies no upper cap on pageSize.
+const SITE_PAGE_SIZE = 100000;
 
 export function TowerRiskReportsTab() {
   const [state, setState] = useState<string | null>(null);
@@ -39,7 +52,7 @@ export function TowerRiskReportsTab() {
   const { data: sitesPage, isLoading: sitesLoading, isError, refetch } = useListSitesQuery({
     state: state ?? undefined,
     district: district ?? undefined,
-    pageSize: 200,
+    pageSize: SITE_PAGE_SIZE,
   });
   const sites = useMemo(() => sitesPage?.items ?? [], [sitesPage]);
   const siteIds = useMemo(() => sites.map((s) => s.id), [sites]);
@@ -47,23 +60,14 @@ export function TowerRiskReportsTab() {
   const { data: observations, isLoading: obsLoading } = useGetCurrentObservationsQuery(siteIds, { skip: siteIds.length === 0 });
   // 7-day span feeding the Short-Range (day 1-3) / Long-Range (day 4-7)
   // forecast table below, per the scope document's own "Short and
-  // Long-Range Prediction" sample.
+  // Long-Range Prediction" sample. Still needed for Humidity, Visibility,
+  // Lightning, Flood and Fog - see ShortLongRangeForecast's own doc comment
+  // on why those five stay on this hourly source.
   const { days: sevenDays, isLoading: sevenDayLoading } = useSevenDayObservations(siteIds);
-
-  // A second, state-scoped-but-not-district-filtered (or, with no state
-  // picked, nationwide) view of the sites, used only by the Region Map below
-  // - every district in view needs its own worst-risk color, not just
-  // whichever single district the District dropdown currently narrows the
-  // table/export data down to (same reasoning as Live Map's `riskScopeSites`).
-  const { data: mapSitesPage } = useListSitesQuery({ state: state ?? undefined, pageSize: 500 });
-  const mapSites = useMemo(() => mapSitesPage?.items ?? [], [mapSitesPage]);
-  const mapSiteIds = useMemo(() => mapSites.map((s) => s.id), [mapSites]);
-  const { days: mapDays } = useSevenDayObservations(mapSiteIds);
-
-  const handleSelectDistrictOnMap = (districtName: string, districtState: string) => {
-    setState(districtState);
-    setDistrict(districtName);
-  };
+  // Real per-day Skymet vendor outlook for the same site list - the source
+  // for Rainfall, Temperature, Wind Speed, Snowfall and Avalanche as of
+  // 2026-09-22 (see useSkymetSevenDayForecast's own doc comment).
+  const { days: skymetDays, isLoading: skymetLoading } = useSkymetSevenDayForecast(sites);
 
   const rows: SiteRiskRow[] = useMemo(() => {
     const bySite = new Map(sites.map((s) => [s.id, s]));
@@ -149,33 +153,16 @@ export function TowerRiskReportsTab() {
 
           <div>
             <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>
-              Region Map
-            </Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-              District boundaries and state outline highlighted, colored by worst overall risk - click a district to
-              filter the tables above
-            </Typography>
-            <RegionRiskMap
-              sites={mapSites}
-              days={mapDays}
-              state={state}
-              district={district}
-              onSelectDistrict={handleSelectDistrictOnMap}
-            />
-          </div>
-
-          <div>
-            <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>
               Short-Range &amp; Long-Range Forecast
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
               Every weather parameter and hazard, per district - current day + next 2 days (Short-Range) and current
               day + next 6 days (Long-Range), per the scope document's daily alert report
             </Typography>
-            {sevenDayLoading ? (
+            {sevenDayLoading || skymetLoading ? (
               <LoadingState label="Loading 7-day outlook..." />
             ) : (
-              <ShortLongRangeForecast sites={sites} days={sevenDays} />
+              <ShortLongRangeForecast sites={sites} days={sevenDays} skymetDays={skymetDays} />
             )}
           </div>
         </>

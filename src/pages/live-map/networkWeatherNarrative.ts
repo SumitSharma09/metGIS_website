@@ -52,6 +52,13 @@ export interface NetworkDaySummary {
   rainProbabilityPct: number | null;
   avgRainfallMm: number | null;
   dominantCondition: WeatherCondition | null;
+  // avgWindSpeed/avgHumidity added 2026-09-24 to feed
+  // NetworkWeatherPanel.tsx's TodayTomorrowHighlight card, per explicit
+  // request ("add some more data like wind speed humidity rain etc") - same
+  // averageOfObservations treatment as avgTemp/avgRainfallMm above, real
+  // per-tower figures for this projected day, never invented.
+  avgWindSpeed: number | null;
+  avgHumidity: number | null;
 }
 
 /**
@@ -74,6 +81,8 @@ export function summarizeNetworkDay(day: ForecastDaySnapshot): NetworkDaySummary
     rainProbabilityPct: observations.length > 0 ? (rainy.length / observations.length) * 100 : null,
     avgRainfallMm: averageOfObservations(observations, (o) => o.rainfallToday),
     dominantCondition: dominantCondition(observations),
+    avgWindSpeed: averageOfObservations(observations, (o) => o.windSpeed),
+    avgHumidity: averageOfObservations(observations, (o) => o.humidity),
   };
 }
 

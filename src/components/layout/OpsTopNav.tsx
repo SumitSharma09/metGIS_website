@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import AppBar from '@mui/material/AppBar';
 import Toolbar from '@mui/material/Toolbar';
 import Box from '@mui/material/Box';
@@ -6,10 +7,18 @@ import Tabs from '@mui/material/Tabs';
 import Tab from '@mui/material/Tab';
 import Typography from '@mui/material/Typography';
 import Tooltip from '@mui/material/Tooltip';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogContentText from '@mui/material/DialogContentText';
+import DialogActions from '@mui/material/DialogActions';
+import Button from '@mui/material/Button';
 import PublicRoundedIcon from '@mui/icons-material/PublicRounded';
 import NotificationsActiveRoundedIcon from '@mui/icons-material/NotificationsActiveRounded';
 import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
 import StormRoundedIcon from '@mui/icons-material/StormRounded';
+import CompareArrowsRoundedIcon from '@mui/icons-material/CompareArrowsRounded';
+import ConstructionRoundedIcon from '@mui/icons-material/ConstructionRounded';
 import { matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { useGetUnreadAlertCountQuery } from '@/features/alerts/alertsApi';
 import { NotificationMenu } from './NotificationMenu';
@@ -20,17 +29,16 @@ import { useClock } from '@/utils/useClock';
 import { COMPANY_NAME, COMPANY_TAGLINE } from '@/utils/branding';
 import bkcLogo from '@/assets/branding/bkc-weathersys-logo.png';
 
-// "Comparison" is deliberately left out of this list for now (real
-// forecast-vs-actual data just landed - see ComparisonPage.tsx/
-// IndusComparisonService - and is still being worked on before it's shown
-// to end users). The route itself (ROUTES.comparison) is untouched, so it's
-// still reachable directly and easy to re-add here later - just add its
-// entry back.
+// "Comparison" re-added 2026-09-22 - the district-level Forecast vs Actual
+// rework (real indus_districts_actual_gtsData/skymet_save_forecast_data
+// tables, see ComparisonPage.tsx/IndusDistrictComparisonService) is now
+// wired up end to end, so it's shown to end users again.
 const NAV_ITEMS = [
   { label: 'Live Map', to: ROUTES.liveMap, icon: <PublicRoundedIcon fontSize="small" /> },
   { label: 'Hazards', to: ROUTES.hazards, icon: <StormRoundedIcon fontSize="small" /> },
   { label: 'Alerts', to: ROUTES.alerts, icon: <NotificationsActiveRoundedIcon fontSize="small" /> },
   { label: 'Reports', to: ROUTES.reports, icon: <DescriptionRoundedIcon fontSize="small" /> },
+  { label: 'Comparison', to: ROUTES.comparison, icon: <CompareArrowsRoundedIcon fontSize="small" /> },
 ];
 
 /** Small pulsing dot + "LIVE" label indicating the app is on the live,
@@ -75,6 +83,11 @@ export function OpsTopNav() {
   const navigate = useNavigate();
   const now = useClock();
   const { data: unread } = useGetUnreadAlertCountQuery();
+  // Hazards is still an active work item (mock cyclone/flood data, no real
+  // NDMA/NDRF feeds - see hazardData.ts) - per explicit 2026-09-24 request,
+  // the nav tab no longer navigates there; it shows a "work in progress"
+  // notice instead so end users aren't shown an unfinished section.
+  const [hazardsNoticeOpen, setHazardsNoticeOpen] = useState(false);
 
   const activeTab = NAV_ITEMS.find((item) => matchPath({ path: `${item.to}/*` }, location.pathname))?.to ?? false;
 
@@ -127,7 +140,13 @@ export function OpsTopNav() {
         <Box sx={{ flexGrow: 1, minWidth: 0, overflow: 'auto' }}>
           <Tabs
             value={activeTab}
-            onChange={(_e, value: string) => navigate(value)}
+            onChange={(_e, value: string) => {
+              if (value === ROUTES.hazards) {
+                setHazardsNoticeOpen(true);
+                return;
+              }
+              navigate(value);
+            }}
             variant="scrollable"
             scrollButtons="auto"
             textColor="primary"
@@ -163,6 +182,24 @@ export function OpsTopNav() {
           <ProfileMenu />
         </Stack>
       </Toolbar>
+
+      <Dialog open={hazardsNoticeOpen} onClose={() => setHazardsNoticeOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <ConstructionRoundedIcon color="warning" />
+          Hazards &mdash; Work in Progress
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This section is currently under development and isn&apos;t ready for use yet. We&apos;re actively
+            building out real cyclone, flood and advisory data feeds for it. Please check back soon.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button variant="contained" onClick={() => setHazardsNoticeOpen(false)}>
+            Got it
+          </Button>
+        </DialogActions>
+      </Dialog>
     </AppBar>
   );
 }

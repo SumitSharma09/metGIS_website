@@ -63,7 +63,7 @@ export function FloodMap({ sites, observations }: FloodMapProps) {
                   onSelectDistrict={() => {}}
                   enableFitBounds={false}
                 />
-                <StateBoundaryLayer stateName={s} feature={stateFeature} />
+                <StateBoundaryLayer stateName={s} features={stateFeature ? [stateFeature] : []} />
               </Fragment>
             );
           })}

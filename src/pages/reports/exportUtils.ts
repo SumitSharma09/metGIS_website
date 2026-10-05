@@ -28,9 +28,14 @@ import {
   regionOf,
   type SeverityMatrix,
   type HazardEntry,
+  type BulletinSeverity,
 } from './bulletinData';
 
-const REPORT_TITLE = 'Tower Risk Report';
+// Renamed on-screen from "Tower Risk Report" to "Districts Risk Report" -
+// the underlying data (real per-site/per-tower observations, grouped and
+// exported per district) is unchanged; only the report's displayed name and
+// exported filename changed, per the 2026-09-24 request.
+const REPORT_TITLE = 'Districts Risk Report';
 const EXPORT_COLUMNS = ['Site', 'Code', 'State', 'District', 'Temperature (°C)', 'Rainfall (mm/hr)', 'Wind (km/h)', 'Humidity (%)', 'Lightning', 'Overall Risk'];
 
 function toRows(rows: SiteRiskRow[]): (string | number)[][] {
@@ -56,7 +61,7 @@ export async function exportSiteRiskToExcel(rows: SiteRiskRow[]): Promise<void> 
   workbook.creator = 'BKC WeatherSys';
   workbook.created = new Date();
 
-  const { worksheet, tableHeaderRow } = buildLetterheadWorksheet(workbook, 'Tower Risk Report', REPORT_TITLE, EXPORT_COLUMNS.length);
+  const { worksheet, tableHeaderRow } = buildLetterheadWorksheet(workbook, 'Districts Risk Report', REPORT_TITLE, EXPORT_COLUMNS.length);
 
   worksheet.columns = EXPORT_COLUMNS.map(() => ({ width: 18 }));
 
@@ -72,7 +77,7 @@ export async function exportSiteRiskToExcel(rows: SiteRiskRow[]): Promise<void> 
   addFooterNote(worksheet, tableHeaderRow + rows.length + 2, EXPORT_COLUMNS.length);
 
   const buffer = await workbook.xlsx.writeBuffer();
-  downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `tower-risk-report-${dayjs().format('YYYY-MM-DD')}.xlsx`);
+  downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `districts-risk-report-${dayjs().format('YYYY-MM-DD')}.xlsx`);
 }
 
 /** PDF export with the same letterhead treatment, plus a page-numbered
@@ -91,7 +96,7 @@ export function exportSiteRiskToPdf(rows: SiteRiskRow[]): void {
   });
 
   drawPdfFooterOnAllPages(doc);
-  doc.save(`tower-risk-report-${dayjs().format('YYYY-MM-DD')}.pdf`);
+  doc.save(`districts-risk-report-${dayjs().format('YYYY-MM-DD')}.pdf`);
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -143,7 +148,7 @@ interface ShortLongRangeExportArgs {
 
 /**
  * Multi-page (one page per parameter, plus a Cyclone page) branded PDF of
- * the Short-Range (3-day) / Long-Range (7-day) forecast, covering every
+ * the Short-Range (3-day) / Long-Range (4-day) forecast, covering every
  * parameter in FORECAST_PARAMETERS rather than just whichever tab is on
  * screen - matches the scope document's own "Short and Long-Range
  * Prediction" sample (per-district rows, per-day columns, color-banded
@@ -171,7 +176,7 @@ export function exportShortLongRangeToPdf({ districts, days, cellsByParam, cyclo
           styles: { halign: 'center' as const, fillColor: [226, 232, 240] as [number, number, number] },
         },
         {
-          content: 'Long-Range Prediction (7 Days)',
+          content: 'Long-Range Prediction (4 Days)',
           colSpan: longDays.length,
           styles: { halign: 'center' as const, fillColor: [203, 213, 225] as [number, number, number] },
         },
@@ -302,7 +307,14 @@ function drawBulletinLegend(doc: jsPDF, startY: number, entries: { label: string
 
 interface NationalBulletinExportArgs {
   regions: string[];
-  days: ForecastDaySnapshot[];
+  // Widened to a minimal `{ offset, label }[]` shape (rather than the
+  // specific ForecastDaySnapshot type) since this function only ever reads
+  // `.label` and the array's length/order - it never touches `.observations`
+  // or `.at`, so it works unchanged whether the caller's real day data is
+  // the old hourly-derived ForecastDaySnapshot[] or the Skymet-sourced
+  // SkymetDaySnapshot[] (see DailyNationalBulletin.tsx's 2026-09-22
+  // migration to the latter).
+  days: { offset: number; label: string }[];
   rainMatrix: SeverityMatrix;
   windMatrix: SeverityMatrix;
   tempMatrix: SeverityMatrix;
@@ -479,9 +491,159 @@ export function exportNationalBulletinToPdf({ regions, days, rainMatrix, windMat
   doc.save(`daily-national-bulletin-${dayjs().format('YYYY-MM-DD')}.pdf`);
 }
 
+// ---- Daily Bulletin Excel exports (added 2026-09-24, National + Circle) --
+// Same letterhead helpers as exportSiteRiskToExcel above, one worksheet per
+// section (rather than one page per section like the PDF) since a workbook
+// doesn't need a page break to separate them and separate sheets are more
+// useful in Excel (each can be filtered/sorted independently). A short
+// italic "Legend: ..." row is written into row 6 of each worksheet - the
+// one row buildLetterheadWorksheet leaves blank (a bottom-border divider
+// with no cell value) between the letterhead block and the table header at
+// row 7 - so the legend doesn't need a rewrite of that shared helper.
+
+function writeLegendRow(worksheet: ExcelJS.Worksheet, text: string, columnCount: number): void {
+  const lastCol = Math.max(columnCount, 4);
+  worksheet.mergeCells(6, 1, 6, lastCol);
+  const cell = worksheet.getCell(6, 1);
+  cell.value = text;
+  cell.font = { italic: true, size: 8.5, color: { argb: 'FF6E7680' } };
+}
+
+function bulletinLegendText(legend: Record<BulletinSeverity, string>): string {
+  return `Legend:  ${BULLETIN_SEVERITIES.map((sev) => `${RAIN_WIND_SEVERITY_LABEL[sev]}: ${legend[sev]}`).join('   |   ')}`;
+}
+
+/** One worksheet: letterhead, an optional legend row, a header row, then
+ *  one plain data row per array entry (no rowSpan grouping like the PDF -
+ *  a repeated first-column value per row is more useful in a spreadsheet,
+ *  since it keeps every row independently sortable/filterable). */
+function writeBulletinSheet(
+  workbook: ExcelJS.Workbook,
+  sheetName: string,
+  reportTitle: string,
+  columns: string[],
+  rows: (string | number)[][],
+  legendText?: string
+): void {
+  const { worksheet, tableHeaderRow } = buildLetterheadWorksheet(workbook, sheetName, reportTitle, columns.length);
+  worksheet.columns = columns.map((_c, i) => ({ width: i < 2 ? 22 : 16 }));
+  if (legendText) writeLegendRow(worksheet, legendText, columns.length);
+
+  worksheet.getRow(tableHeaderRow).values = columns;
+  styleTableHeaderRow(worksheet, tableHeaderRow, columns.length);
+
+  rows.forEach((row, i) => {
+    const rowNumber = tableHeaderRow + 1 + i;
+    worksheet.getRow(rowNumber).values = row;
+    styleDataRow(worksheet, rowNumber, columns.length);
+  });
+
+  addFooterNote(worksheet, tableHeaderRow + rows.length + 2, columns.length);
+}
+
+/** A lead "Summary" worksheet carrying the Circle Bulletin's auto-generated
+ *  headline callout (see bulletinData.ts's buildSkymetCircleHeadlines) -
+ *  narrative text doesn't fit the header/row shape every other sheet uses,
+ *  so it gets its own sheet instead of being crammed into a legend row. */
+function writeHeadlinesSheet(workbook: ExcelJS.Workbook, reportTitle: string, headlines: string[]): void {
+  const { worksheet, tableHeaderRow } = buildLetterheadWorksheet(workbook, 'Summary', reportTitle, 4);
+  headlines.forEach((line, i) => {
+    const rowNumber = tableHeaderRow + i;
+    worksheet.mergeCells(rowNumber, 1, rowNumber, 4);
+    const cell = worksheet.getCell(rowNumber, 1);
+    cell.value = `• ${line}`;
+    cell.font = { size: 10 };
+    worksheet.getRow(rowNumber).height = 18;
+  });
+}
+
+/**
+ * Excel counterpart to exportNationalBulletinToPdf above - same source data
+ * (so it can never disagree with what's on screen or in the PDF), laid out
+ * as: one sheet each for Rain/Temperature/Wind (Region, Severity, day
+ * columns), one Hazard sheet (Region, Peril, day columns), and one Hazard
+ * Legend sheet.
+ */
+export async function exportNationalBulletinToExcel({
+  regions,
+  days,
+  rainMatrix,
+  windMatrix,
+  tempMatrix,
+  hazardRows,
+  stateByLabel,
+}: NationalBulletinExportArgs): Promise<void> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'BKC WeatherSys';
+  workbook.created = new Date();
+
+  const dayColumns = days.map((d) => d.label);
+
+  (
+    [
+      { title: 'Rain Fall Prediction', sheet: 'Rain Fall Prediction', matrix: rainMatrix, legend: RAIN_LEGEND },
+      { title: 'Temperature Prediction', sheet: 'Temperature Prediction', matrix: tempMatrix, legend: TEMPERATURE_LEGEND },
+      { title: 'Wind Prediction', sheet: 'Wind Prediction', matrix: windMatrix, legend: WIND_LEGEND },
+    ] as const
+  ).forEach((section) => {
+    const rows: (string | number)[][] = [];
+    regions.forEach((region) => {
+      BULLETIN_SEVERITIES.forEach((sev) => {
+        const values = dayColumns.map((_label, i) => {
+          const names = section.matrix[sev][i].filter((n) => regionOf(stateByLabel.get(n) ?? '') === region);
+          return names.length > 0 ? names.join(', ') : '-';
+        });
+        rows.push([region, RAIN_WIND_SEVERITY_LABEL[sev], ...values]);
+      });
+    });
+    writeBulletinSheet(
+      workbook,
+      section.sheet,
+      `Daily Weather Bulletin - PAN India - ${section.title}`,
+      ['Region', 'Severity', ...dayColumns],
+      rows,
+      bulletinLegendText(section.legend)
+    );
+  });
+
+  const hazardBodyRows: (string | number)[][] = [];
+  regions.forEach((region) => {
+    hazardRows.forEach((row) => {
+      const values = dayColumns.map((_label, i) => {
+        const entries = row.cells[i].filter((e) => regionOf(stateByLabel.get(e.name) ?? '') === region);
+        if (entries.length === 0) return '-';
+        return entries.map((e) => `${e.name} (${HAZARD_SEVERITY_LABEL[e.severity]})`).join(', ');
+      });
+      hazardBodyRows.push([region, row.label, ...values]);
+    });
+  });
+  writeBulletinSheet(
+    workbook,
+    'Hazard',
+    'Daily Weather Bulletin - PAN India - Hazard Prediction',
+    ['Region', 'Peril', ...dayColumns],
+    hazardBodyRows
+  );
+
+  const hazardLegendColumns = ['Severity', ...HAZARD_LEGEND.map((l) => l.label)];
+  const hazardLegendRows = BULLETIN_SEVERITIES.map((sev) => [
+    HAZARD_SEVERITY_LABEL[sev],
+    ...HAZARD_LEGEND.map((l) => l.bands[sev]),
+  ]);
+  writeBulletinSheet(workbook, 'Hazard Legend', 'Daily Weather Bulletin - Hazard Legend', hazardLegendColumns, hazardLegendRows);
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  downloadBlob(
+    new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    `daily-national-bulletin-${dayjs().format('YYYY-MM-DD')}.xlsx`
+  );
+}
+
 interface CircleBulletinExportArgs {
   circle: string;
-  days: ForecastDaySnapshot[];
+  // Same widened shape as NationalBulletinExportArgs.days above, for the
+  // same reason - see that field's own comment.
+  days: { offset: number; label: string }[];
   rainMatrix: SeverityMatrix;
   windMatrix: SeverityMatrix;
   tempMatrix: SeverityMatrix;
@@ -628,4 +790,77 @@ export function exportCircleBulletinToPdf({ circle, days, rainMatrix, windMatrix
   drawPdfFooterOnAllPages(doc);
   const slug = circle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
   doc.save(`daily-circle-bulletin-${slug}-${dayjs().format('YYYY-MM-DD')}.pdf`);
+}
+
+/**
+ * Excel counterpart to exportCircleBulletinToPdf above - same source data,
+ * laid out as: a Summary sheet with the auto-generated headlines (if any),
+ * one sheet each for Rain/Temperature/Wind (Severity + day columns, already
+ * scoped to one circle so no Region/District grouping column is needed -
+ * matches the on-screen "District view" tables, which are flat for the same
+ * reason), and one Hazard sheet.
+ */
+export async function exportCircleBulletinToExcel({
+  circle,
+  days,
+  rainMatrix,
+  windMatrix,
+  tempMatrix,
+  hazardRows,
+  headlines,
+}: CircleBulletinExportArgs): Promise<void> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'BKC WeatherSys';
+  workbook.created = new Date();
+
+  const dayColumns = days.map((d) => d.label);
+  const bulletinTitle = `Daily Weather Bulletin - ${circle} - ${dayjs().format('D MMM YYYY')}`;
+
+  if (headlines.length > 0) {
+    writeHeadlinesSheet(workbook, bulletinTitle, headlines);
+  }
+
+  (
+    [
+      { title: 'Rain Fall Prediction - District view', sheet: 'Rain Fall', matrix: rainMatrix, legend: RAIN_LEGEND },
+      { title: 'Temperature Prediction - District view', sheet: 'Temperature', matrix: tempMatrix, legend: TEMPERATURE_LEGEND },
+      { title: 'Wind Prediction - District view', sheet: 'Wind', matrix: windMatrix, legend: WIND_LEGEND },
+    ] as const
+  ).forEach((section) => {
+    const rows: (string | number)[][] = BULLETIN_SEVERITIES.map((sev) => [
+      RAIN_WIND_SEVERITY_LABEL[sev],
+      ...dayColumns.map((_label, i) => (section.matrix[sev][i].length > 0 ? section.matrix[sev][i].join(', ') : '-')),
+    ]);
+    writeBulletinSheet(
+      workbook,
+      section.sheet,
+      `Daily Weather Bulletin - ${circle} - ${section.title}`,
+      ['Severity', ...dayColumns],
+      rows,
+      bulletinLegendText(section.legend)
+    );
+  });
+
+  const hazardBodyRows: (string | number)[][] = hazardRows.map((row) => [
+    row.label,
+    ...dayColumns.map((_label, i) => {
+      const entries = row.cells[i];
+      if (entries.length === 0) return '-';
+      return entries.map((e) => `${e.name} (${HAZARD_SEVERITY_LABEL[e.severity]})`).join(', ');
+    }),
+  ]);
+  writeBulletinSheet(
+    workbook,
+    'Hazard',
+    `Daily Weather Bulletin - ${circle} - Hazard Prediction`,
+    ['Peril', ...dayColumns],
+    hazardBodyRows
+  );
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const slug = circle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  downloadBlob(
+    new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    `daily-circle-bulletin-${slug}-${dayjs().format('YYYY-MM-DD')}.xlsx`
+  );
 }

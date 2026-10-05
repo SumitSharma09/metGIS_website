@@ -12,7 +12,14 @@ import type { Site, SiteListQuery } from './types';
  *   GET /sites/:id
  *   GET /sites/circles              (distinct list of circles/regions, for filter dropdowns)
  *   GET /sites/states               (distinct list of states, for the Live Map / Reports / Comparison drill-down)
- *   GET /sites/districts?state=     (distinct list of districts within a state)
+ *   GET /sites/districts?state=     (distinct list of districts within a state - derived
+ *                                    from real towers' own District field, see listDistricts)
+ *   GET /sites/districts/reference?state=  (curated district list from the indus_districts
+ *                                    reference table - see listDistrictsReference. Added
+ *                                    2026-10-04 so the Live Map's dropdown can use a correct,
+ *                                    disambiguated district list instead of whatever spelling
+ *                                    happens to exist among real towers - see
+ *                                    claude/live-map-indus-district-hull-replacement.md)
  *   GET /sites/tehsils?state=&district=   (distinct list of tehsils within a district)
  */
 export const sitesApi = apiSlice.injectEndpoints({
@@ -99,6 +106,29 @@ export const sitesApi = apiSlice.injectEndpoints({
         return restRequest<string[]>({ url: '/sites/districts', params: { state } });
       },
     }),
+    // Curated district list (indus_districts reference table), not derived
+    // from real towers' own District field - see this file's REST-contract
+    // comment above and the backend's SiteService#listDistrictsFromReferenceTable.
+    // Mock mode has no separate curated table, so it falls back to the same
+    // tower-derived list listDistricts already uses in mock mode.
+    listDistrictsReference: builder.query<string[], string | void>({
+      queryFn: async (state, api) => {
+        if (isMockMode) {
+          const user = currentMockUser(api);
+          if (state && !canAccessState(user, state)) {
+            return { data: await mockResponse([]) };
+          }
+          const list = state
+            ? districtsForState(state)
+            : isPanIndia(user)
+              ? districtsForState(undefined)
+              : [...new Set(restrictSites(user, sites).map((s) => s.district))].sort();
+          const data = await mockResponse(list);
+          return { data };
+        }
+        return restRequest<string[]>({ url: '/sites/districts/reference', params: { state } });
+      },
+    }),
     listTehsils: builder.query<string[], { state?: string; district?: string } | void>({
       queryFn: async (query, api) => {
         const { state, district } = query ?? {};
@@ -131,5 +161,6 @@ export const {
   useListCirclesQuery,
   useListStatesQuery,
   useListDistrictsQuery,
+  useListDistrictsReferenceQuery,
   useListTehsilsQuery,
 } = sitesApi;

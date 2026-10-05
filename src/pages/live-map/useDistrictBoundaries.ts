@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { fetchStateDistricts, fetchIndiaStates, extractStateName, type DistrictFeature } from './districtGeo';
+import {
+  fetchStateDistricts,
+  fetchIndiaStates,
+  getCachedStateDistricts,
+  getCachedIndiaStates,
+  extractStateName,
+  type DistrictFeature,
+} from './districtGeo';
 import { normalizeName, splitCircleStateName } from '@/utils/districtRisk';
 import { useScopedStates } from '@/features/users/useScopedStates';
 import { useListStatesQuery } from '@/features/sites/sitesApi';
@@ -35,6 +42,22 @@ export function useDistrictBoundariesForStates(stateNames: string[]) {
     stateNames.forEach((name) => {
       if (requested.current.has(name)) return;
       requested.current.add(name);
+
+      // Cache check added 2026-09-30, per a real report that the "Loading
+      // district boundaries..." popup looked "fake" - see
+      // getCachedStateDistricts's own doc comment for the full story. A
+      // remount of this hook (e.g. leaving Live Map and coming back) starts
+      // `requested` over from empty, but districtGeo.ts's own module-level
+      // cache survives across that remount for the tab's whole lifetime. Go
+      // straight to the resolved state when the data is already there
+      // instead of flashing `loading: true` for a fetch that both isn't
+      // needed and never happens.
+      const cached = getCachedStateDistricts(name);
+      if (cached) {
+        setStatusByState((prev) => ({ ...prev, [name]: { features: cached.features, loading: false, error: false } }));
+        return;
+      }
+
       setStatusByState((prev) => ({ ...prev, [name]: { features: [], loading: true, error: false } }));
       fetchStateDistricts(name)
         .then((collection) => {
@@ -75,6 +98,17 @@ export function useIndiaStates(): IndiaStatesStatus {
   useEffect(() => {
     if (requested.current) return;
     requested.current = true;
+
+    // Same cache-check fix as useDistrictBoundariesForStates above (2026-09-30)
+    // - a remount must not show "Loading state boundaries..." for the one
+    // all-India outline file once it's already sitting in districtGeo.ts's
+    // module-level cache from earlier in the tab.
+    const cached = getCachedIndiaStates();
+    if (cached) {
+      setStatus({ features: cached.features, loading: false, error: false });
+      return;
+    }
+
     fetchIndiaStates()
       .then((collection) => setStatus({ features: collection.features, loading: false, error: false }))
       .catch(() => {

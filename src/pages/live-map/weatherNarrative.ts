@@ -1,11 +1,49 @@
+import dayjs from 'dayjs';
 import type { ForecastDay, HistoricalPoint, WeatherCondition } from '@/features/weather/types';
 
 /** Mean of a numeric field across a set of historical readings - null (not
  *  0) when there's nothing to average yet, so callers can show a loading/
- *  placeholder state instead of a misleading "0". */
+ *  placeholder state instead of a misleading "0". Callers with readings
+ *  that span both day and night should bucket with `averageByPeriod`
+ *  instead of calling this directly across the full set - see that
+ *  function's doc comment for why. */
 export function averageOf(points: HistoricalPoint[], pick: (p: HistoricalPoint) => number): number | null {
   if (points.length === 0) return null;
   return points.reduce((sum, p) => sum + pick(p), 0) / points.length;
+}
+
+export type PeriodOfDay = 'day' | 'night';
+
+/** Which half of the clock an ISO timestamp falls in - 06:00-17:59 counts
+ *  as daytime, 18:00-05:59 as nighttime. A fixed clock-hour split rather
+ *  than a real per-site sunrise/sunset calculation - simple, and good
+ *  enough for what this is guarding against (see `averageByPeriod`). */
+export function periodOfDay(isoTimestamp: string): PeriodOfDay {
+  const hour = dayjs(isoTimestamp).hour();
+  return hour >= 6 && hour < 18 ? 'day' : 'night';
+}
+
+/**
+ * Mean of a numeric field, bucketed into daytime and nighttime readings
+ * first so the two are never blended into one figure - added 2026-09-22
+ * per an explicit requirement that district/site temperature aggregation
+ * must not average across hours with very different conditions (a 1-2 AM
+ * low should never quietly pull down what reads as "the" temperature for
+ * a tower or district). `WeatherDetailsPanel`'s old flat 24-hour average
+ * over `history` (which spans a full day) was exactly that mistake at the
+ * single-tower level - this replaces it. Each bucket is null (not 0) when
+ * it has no readings yet, same convention as `averageOf`.
+ */
+export function averageByPeriod(
+  points: HistoricalPoint[],
+  pick: (p: HistoricalPoint) => number
+): Record<PeriodOfDay, { value: number | null; count: number }> {
+  const day = points.filter((p) => periodOfDay(p.timestamp) === 'day');
+  const night = points.filter((p) => periodOfDay(p.timestamp) === 'night');
+  return {
+    day: { value: averageOf(day, pick), count: day.length },
+    night: { value: averageOf(night, pick), count: night.length },
+  };
 }
 
 const CONDITION_PHRASE: Record<WeatherCondition, string> = {

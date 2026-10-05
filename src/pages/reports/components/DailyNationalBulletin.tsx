@@ -11,12 +11,12 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Button from '@mui/material/Button';
 import PictureAsPdfRoundedIcon from '@mui/icons-material/PictureAsPdfRounded';
+import TableChartRoundedIcon from '@mui/icons-material/TableChartRounded';
 import { useListSitesQuery } from '@/features/sites/sitesApi';
 import { RISK_COLOR } from '@/utils/severity';
 import { getActiveCyclone } from '@/pages/hazards/hazardData';
-import { useSevenDayObservations } from '../useSevenDayObservations';
-import { useSevenDayForecastTotals } from '../useSevenDayForecastTotals';
-import { exportNationalBulletinToPdf } from '../exportUtils';
+import { useSkymetSevenDayForecast } from '../useSkymetSevenDayForecast';
+import { exportNationalBulletinToPdf, exportNationalBulletinToExcel } from '../exportUtils';
 import {
   BULLETIN_SEVERITIES,
   RAIN_WIND_SEVERITY_LABEL,
@@ -25,14 +25,13 @@ import {
   WIND_LEGEND,
   TEMPERATURE_LEGEND,
   HAZARD_LEGEND,
-  BULLETIN_HAZARD_PERILS,
+  SKYMET_BULLETIN_HAZARD_PERILS,
   REGION_ORDER,
   regionOf,
   districtStateLabel,
   buildStateLookup,
-  buildParameterMatrix,
-  buildForecastParameterMatrix,
-  buildHazardRow,
+  buildSkymetParameterMatrix,
+  buildSkymetHazardRow,
   buildCycloneHazardRow,
   type HazardEntry,
 } from '../bulletinData';
@@ -117,9 +116,14 @@ const SITE_PAGE_SIZE = 100000;
 export function DailyNationalBulletin() {
   const { data: sitesPage, isLoading: sitesLoading } = useListSitesQuery({ pageSize: SITE_PAGE_SIZE });
   const sites = useMemo(() => sitesPage?.items ?? [], [sitesPage]);
-  const siteIds = useMemo(() => sites.map((s) => s.id), [sites]);
-  const { days, isLoading: obsLoading } = useSevenDayObservations(siteIds);
-  const { days: forecastDays, isLoading: forecastLoading } = useSevenDayForecastTotals(siteIds);
+  // Real per-day Skymet vendor outlook (skymet_7daysforecast_data), not the
+  // old hourly-derived figures - see useSkymetSevenDayForecast's own doc
+  // comment. Replaces both the old noon-snapshot hook (useSevenDayObservations,
+  // for Wind + the hazard rows) and the old daily-aggregate hook
+  // (useSevenDayForecastTotals, for Rain/Temp) - Skymet reports all three
+  // parameters (plus the primitives Landslide/Avalanche/Snowfall need)
+  // directly, so a single hook now covers every row in this bulletin.
+  const { days, isLoading: skymetLoading } = useSkymetSevenDayForecast(sites);
   const cyclone = useMemo(() => getActiveCyclone(), []);
 
   const regions = useMemo(() => {
@@ -140,32 +144,31 @@ export function DailyNationalBulletin() {
     return map;
   }, [sites, cyclone]);
 
-  // Rain Fall now uses the real daily-aggregated total (a calendar day's
-  // rainfall SUM) instead of a single noon snapshot - see
-  // useSevenDayForecastTotals. Temperature is new, also a real daily MAX.
-  // Wind stays on the noon-snapshot observations (a gust reading has no
-  // equally obvious daily reduction).
-  const rainMatrix = useMemo(
-    () => buildForecastParameterMatrix(sites, forecastDays, 'rainfall', districtStateLabel),
-    [sites, forecastDays]
-  );
+  // Rain Fall, Temperature and Wind all now read the real Skymet per-day
+  // figure (rainfall amount, max temperature, max wind speed respectively) -
+  // see useSkymetSevenDayForecast's doc comment for why these three (and
+  // only these three) come from Skymet.
+  const rainMatrix = useMemo(() => buildSkymetParameterMatrix(sites, days, 'rainfall', districtStateLabel), [sites, days]);
   const tempMatrix = useMemo(
-    () => buildForecastParameterMatrix(sites, forecastDays, 'temperature', districtStateLabel),
-    [sites, forecastDays]
+    () => buildSkymetParameterMatrix(sites, days, 'temperature', districtStateLabel),
+    [sites, days]
   );
-  const windMatrix = useMemo(() => buildParameterMatrix(sites, days, 'windSpeed', districtStateLabel), [sites, days]);
+  const windMatrix = useMemo(
+    () => buildSkymetParameterMatrix(sites, days, 'windSpeed', districtStateLabel),
+    [sites, days]
+  );
 
   const hazardRows = useMemo(
     () => [
       {
         key: 'cyclone',
-        label: cyclone ? `Cyclone (${cyclone.name})` : 'Cyclone (no live data)',
+        label: cyclone ? `Cyclone (${cyclone.name})` : 'Cyclone',
         cells: buildCycloneHazardRow(cyclone, days, (district, state) => `${district} (${state})`),
       },
-      ...BULLETIN_HAZARD_PERILS.map((peril) => ({
+      ...SKYMET_BULLETIN_HAZARD_PERILS.map((peril) => ({
         key: peril.key,
         label: peril.label,
-        cells: buildHazardRow(sites, days, peril, districtStateLabel),
+        cells: buildSkymetHazardRow(sites, days, peril, districtStateLabel),
       })),
     ],
     [sites, days, cyclone]
@@ -174,11 +177,22 @@ export function DailyNationalBulletin() {
   const shortDays = days.slice(0, 3);
   const longDays = days.slice(3, 7);
 
-  const loading = sitesLoading || obsLoading || forecastLoading;
+  const loading = sitesLoading || skymetLoading;
 
   return (
     <Stack spacing={2}>
-      <Stack direction="row" justifyContent="flex-end">
+      <Stack direction="row" spacing={1} justifyContent="flex-end">
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<TableChartRoundedIcon />}
+          disabled={loading || regions.length === 0}
+          onClick={() =>
+            exportNationalBulletinToExcel({ regions, days, rainMatrix, windMatrix, tempMatrix, hazardRows, stateByLabel })
+          }
+        >
+          Export Excel
+        </Button>
         <Button
           size="small"
           variant="outlined"
